@@ -217,7 +217,7 @@
   const pickerRow = document.getElementById('pickerRow');
 
   let W = 0, H = 0, DPR = 1;
-  const assets = { bg: null, gull: null, gullFlipped: null };
+  const assets = { bg: null, gull: null, gullFlipped: null, boyHead: null };
 
   function loadImage(src) {
     return new Promise((resolve, reject) => {
@@ -246,15 +246,21 @@
     parapetTop: 215 + OFFSET_Y,
 
     // Areas of Lev's original sandwich and gull (to be masked over) — generous bbox
-    levSandwichArea:  { x: 670, y: 165 + OFFSET_Y, w: 115, h: 65 },
+    levSandwichArea:  { x: 660, y: 158 + OFFSET_Y, w: 130, h: 75 },
     // Donor patch — clean parapet section to the left, well clear of sandwich
-    levSandwichDonor: { x: 470, y: 165 + OFFSET_Y },
+    levSandwichDonor: { x: 460, y: 158 + OFFSET_Y },
 
     levGullArea:      { x: 765, y: 80 + OFFSET_Y, w: 250, h: 155 },
     // Donor patch — clean sky+parapet section to the LEFT of Lev's sandwich,
     // safely between boy (ends x=425) and sandwich (starts x=695).
     // Donor end = 430 + 250 = 680 < 695, so won't capture sandwich
-    levGullDonor:     { x: 430, y: 80 + OFFSET_Y }
+    levGullDonor:     { x: 430, y: 80 + OFFSET_Y },
+
+    // Boy's head area — entirely in sky (above parapet), easy to mask
+    boyHeadArea:      { x: 305, y: 90 + OFFSET_Y, w: 100, h: 85 },
+    boyHeadDonor:     { x: 510, y: 90 + OFFSET_Y },
+    // Where to draw the animated head sprite (center of head area)
+    boyHeadCenter:    { x: 355, y: 132 + OFFSET_Y }
   };
 
   let bgScale = 1, bgOffsetX = 0, bgOffsetY = 0;
@@ -328,31 +334,98 @@
   function gullDisplaySize() { return 120 * bgScale; }
 
   // ===== GULLS =====
-  function makeGull(startOverride) {
+  // Spawn types:
+  //   'normal'  — flies in from sky from a side
+  //   'dive'    — appears high above sandwich, drops straight down (fast!)
+  //   'walking' — lands on parapet far from sandwich, walks toward it
+  //   'fromLeft'/'fromRight' — force side for paired attacks
+  function makeGull(opts) {
+    opts = opts || {};
     const sandPt = srcToCanvas(SRC.sandwichCenter.x, SRC.sandwichCenter.y);
     let startX, startY, fromLeft;
-    if (startOverride) {
-      startX = startOverride.x;
-      startY = startOverride.y;
-      fromLeft = startOverride.x < W / 2;
+    let spawnType = opts.type || 'normal';
+
+    if (opts.startOverride) {
+      startX = opts.startOverride.x;
+      startY = opts.startOverride.y;
+      fromLeft = startX < W / 2;
+    } else if (spawnType === 'dive') {
+      // Appear high directly above sandwich
+      startX = sandPt.x + jit(30 * bgScale);
+      startY = Math.max(20, srcToCanvas(0, 40).y);
+      fromLeft = false; // doesn't matter, will dive straight
+    } else if (spawnType === 'walking') {
+      // Land on parapet, far from sandwich
+      const onLeft = Math.random() < 0.5;
+      const parapetTopY = srcToCanvas(0, SRC.parapetTop).y;
+      startY = parapetTopY - 5 * bgScale; // slightly above parapet top
+      if (onLeft) {
+        // To the left of the boy — between left edge and boy
+        startX = Math.max(40, srcToCanvas(80, 0).x);
+        fromLeft = true;
+      } else {
+        // To the right of perched gull
+        startX = Math.min(W - 40, srcToCanvas(1050, 0).x);
+        fromLeft = false;
+      }
+    } else if (spawnType === 'fromLeft') {
+      fromLeft = true;
+      startX = -120;
+      const skyTopCanvas = Math.max(20, srcToCanvas(0, 60).y);
+      startY = skyTopCanvas + Math.random() * Math.max(100, sandPt.y - skyTopCanvas - 100);
+    } else if (spawnType === 'fromRight') {
+      fromLeft = false;
+      startX = W + 120;
+      const skyTopCanvas = Math.max(20, srcToCanvas(0, 60).y);
+      startY = skyTopCanvas + Math.random() * Math.max(100, sandPt.y - skyTopCanvas - 100);
     } else {
       fromLeft = Math.random() < 0.5;
       startX = fromLeft ? -120 : W + 120;
       const skyTopCanvas = Math.max(20, srcToCanvas(0, 60).y);
       startY = skyTopCanvas + Math.random() * Math.max(100, sandPt.y - skyTopCanvas - 100);
     }
+
     const targetX = sandPt.x + jit(40 * bgScale);
     const targetY = sandPt.y - 35 * bgScale;
     const dx = targetX - startX;
     const dy = targetY - startY;
     const dist = Math.hypot(dx, dy);
-    const speed = (1.6 + state.timeAlive * 0.0004 + Math.random() * 0.7) * Math.max(1, bgScale * 0.8);
+
+    // Speed scales with difficulty/time
+    let baseSpeed = 1.6 + state.timeAlive * 0.0004 + Math.random() * 0.7;
+    if (spawnType === 'dive') baseSpeed = 4.5 + Math.random() * 1.5; // very fast
+    if (spawnType === 'walking') baseSpeed = 1.2 + Math.random() * 0.4; // slower walk
+
+    const speed = baseSpeed * Math.max(1, bgScale * 0.8);
+
+    // For 'walking' state — set initial state to 'walking' instead of 'flying'
+    let initState = 'flying';
+    let vx, vy;
+    if (spawnType === 'walking') {
+      initState = 'walking';
+      // walks horizontally toward sandwich along parapet
+      vx = (targetX > startX ? 1 : -1) * speed * 0.6;
+      vy = 0;
+    } else {
+      vx = (dx/dist) * speed;
+      vy = (dy/dist) * speed;
+    }
+
+    // Facing: head should face toward direction of horizontal motion
+    // Original sprite (gull) faces LEFT; gullFlipped faces RIGHT
+    // facing=1 → use gull (faces left) → moving leftward
+    // facing=-1 → use gullFlipped (faces right) → moving rightward
+    let facing;
+    if (vx > 0) facing = -1;  // moving right, need right-facing sprite
+    else        facing =  1;  // moving left, need left-facing sprite
+
     return {
       x: startX, y: startY, tx: targetX, ty: targetY,
-      vx: (dx/dist) * speed, vy: (dy/dist) * speed,
-      state: 'flying', stateT: 0,
+      vx, vy,
+      state: initState, stateT: 0,
+      spawnType,
       bob: Math.random() * Math.PI * 2,
-      facing: fromLeft ? -1 : 1,
+      facing,
       sizeFactor: 0.85 + Math.random() * 0.3,
       rot: 0
     };
@@ -372,12 +445,23 @@
           g.x = g.tx; g.y = g.ty;
           chompSound();
         }
+      } else if (g.state === 'walking') {
+        g.x += g.vx * dt / 16;
+        // small bobbing while walking
+        g.y = g.ty + Math.sin(g.bob * 2) * 1.5;
+        if (Math.abs(g.tx - g.x) < 25 * bgScale) {
+          g.state = 'pecking';
+          g.stateT = 0; g.vx = 0; g.vy = 0;
+          g.x = g.tx; g.y = g.ty;
+          chompSound();
+        }
       } else if (g.state === 'pecking') {
         if (g.stateT > 700) {
           state.lives--;
           state.shake = 16;
           state.flash = 1;
           state.biteProgress = 1;
+          triggerBoyStartle();
           updateLivesUI();
           flashSandwichCrumbs();
           g.state = 'fleeing';
@@ -672,7 +756,7 @@
       area.y * bgScale + bgOffsetY
     );
   }
-  function maskLevSandwich() { maskLevArea(SRC.levSandwichArea, SRC.levSandwichDonor, 'sand', 0.22); }
+  function maskLevSandwich() { maskLevArea(SRC.levSandwichArea, SRC.levSandwichDonor, 'sand', 0.05); }
   function maskLevGull()     { maskLevArea(SRC.levGullArea,     SRC.levGullDonor,     'gull', 0.18); }
 
   // ===== PERCHED GULL (our sprite drawn in the spot where we masked Lev's gull) =====
@@ -707,7 +791,7 @@
         newGull.vy = (dy/dist) * speed;
         newGull.tx = sandPt.x;
         newGull.ty = sandPt.y - 35 * bgScale;
-        newGull.facing = -1;
+        newGull.facing = 1;  // flying LEFT toward sandwich, head-first
         state.gulls.push(newGull);
       }
     }
@@ -718,7 +802,7 @@
     if (pg.state === 'launched') return;
     const center = srcToCanvas(SRC.gullPerchCenter.x, SRC.gullPerchCenter.y);
     const h = gullDisplaySize();
-    const sprite = assets.gullFlipped; // facing left, like Lev drew
+    const sprite = assets.gull; // original: head/beak face LEFT toward sandwich
     const aspect = sprite.width / sprite.height;
     const w = h * aspect;
 
@@ -744,6 +828,55 @@
 
   function resetPerched() {
     perchedGullState = { state: 'perched', t: 0, flutter: 0 };
+  }
+
+  // ===== BOY HEAD (animated, vairant C: only the head moves) =====
+  let boyHeadState = { startle: 0, nod: 0 };  // both 1.0 → 0.0 over time
+  function triggerBoyStartle() { boyHeadState.startle = 1; }
+  function triggerBoyNod() { boyHeadState.nod = 1; }
+
+  function maskBoyHead() { maskLevArea(SRC.boyHeadArea, SRC.boyHeadDonor, 'boyHead', 0.10); }
+
+  function drawBoyHead() {
+    if (!assets.boyHead) return;
+    const center = srcToCanvas(SRC.boyHeadCenter.x, SRC.boyHeadCenter.y);
+    const sprite = assets.boyHead;
+    const targetW = SRC.boyHeadArea.w * bgScale * 0.95;
+    const aspect = sprite.width / sprite.height;
+    const w = targetW;
+    const h = w / aspect;
+
+    // Idle breathing + sway
+    const breath = 1 + Math.sin(now * 0.0015) * 0.018;
+    const sway = Math.sin(now * 0.0009) * 1.0;
+    let extraRot = Math.sin(now * 0.0007) * 0.012;
+    let extraY = 0;
+
+    // Startle — quick down-tilt + shake
+    if (boyHeadState.startle > 0) {
+      const s = boyHeadState.startle;
+      extraRot += (1 - s) * 0.18 * Math.exp(-(1-s) * 4);
+      extraY += s * 6 * bgScale * Math.exp(-(1-s) * 4);
+      // shake
+      extraY += Math.sin(now * 0.04) * s * 1.5;
+    }
+    // Nod — when chasing away a gull
+    if (boyHeadState.nod > 0) {
+      const n = boyHeadState.nod;
+      extraRot += -n * 0.12 * Math.sin(n * Math.PI);
+    }
+
+    ctx.save();
+    ctx.translate(center.x + sway, center.y + extraY);
+    ctx.rotate(extraRot);
+    ctx.scale(1, breath);
+
+    const prev = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = 'darken';
+    ctx.drawImage(sprite, -w/2, -h/2, w, h);
+    ctx.globalCompositeOperation = prev;
+
+    ctx.restore();
   }
 
   // ===== INTERACTION =====
@@ -776,6 +909,7 @@
         }
         state.score++;
         scoreEl.textContent = state.score;
+        triggerBoyNod();
         whooshSound(); gullCry();
         hit = true; break;
       }
@@ -917,8 +1051,44 @@
 
       state.spawnTimer -= dt;
       if (state.spawnTimer <= 0) {
-        state.gulls.push(makeGull());
-        const factor = Math.max(0.5, 1 - state.timeAlive * 0.000035);
+        // Difficulty stages
+        // Stage 0:  0–15s — single normal gulls
+        // Stage 1: 15–30s — singles, occasional pair (left+right), some walkers
+        // Stage 2: 30s+   — swarms of 3, occasional dive, walkers more often
+        const t = state.timeAlive;
+        if (t < 15000) {
+          state.gulls.push(makeGull());
+        } else if (t < 30000) {
+          const r = Math.random();
+          if (r < 0.20) {
+            // pair attack: simultaneous left + right
+            state.gulls.push(makeGull({ type: 'fromLeft' }));
+            state.gulls.push(makeGull({ type: 'fromRight' }));
+          } else if (r < 0.35) {
+            state.gulls.push(makeGull({ type: 'walking' }));
+          } else {
+            state.gulls.push(makeGull());
+          }
+        } else {
+          const r = Math.random();
+          if (r < 0.18) {
+            // swarm of 3
+            state.gulls.push(makeGull({ type: 'fromLeft' }));
+            state.gulls.push(makeGull({ type: 'fromRight' }));
+            setTimeout(() => { if (state.running) state.gulls.push(makeGull()); }, 250);
+          } else if (r < 0.30) {
+            // dive bomb!
+            state.gulls.push(makeGull({ type: 'dive' }));
+          } else if (r < 0.45) {
+            state.gulls.push(makeGull({ type: 'walking' }));
+          } else if (r < 0.60) {
+            state.gulls.push(makeGull({ type: 'fromLeft' }));
+            state.gulls.push(makeGull({ type: 'fromRight' }));
+          } else {
+            state.gulls.push(makeGull());
+          }
+        }
+        const factor = Math.max(0.45, 1 - state.timeAlive * 0.000035);
         state.spawnInterval = (1900 + Math.random() * 600) * factor;
         state.spawnTimer = state.spawnInterval;
       }
@@ -927,6 +1097,8 @@
       if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 0.06);
       if (state.flash > 0) state.flash = Math.max(0, state.flash - dt * 0.003);
       if (state.biteProgress > 0) state.biteProgress = Math.max(0, state.biteProgress - dt * 0.003);
+      if (boyHeadState.startle > 0) boyHeadState.startle = Math.max(0, boyHeadState.startle - dt * 0.0015);
+      if (boyHeadState.nod > 0) boyHeadState.nod = Math.max(0, boyHeadState.nod - dt * 0.003);
     }
 
     ctx.save();
@@ -939,10 +1111,14 @@
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Always mask Lev's original sandwich and gull (cover them with neighbouring bg patch)
-    // so our managed sprites can replace them and disappear cleanly when removed.
+    // Always mask Lev's original sandwich, gull, and boy's head (cover them with
+    // neighbouring bg patch) so our managed sprites can replace them and animate.
     maskLevSandwich();
     maskLevGull();
+    maskBoyHead();
+
+    // Animated boy head (rest of his body is still in the bg as Lev drew)
+    drawBoyHead();
 
     // Our perched gull (sprite that looks identical to Lev's, but we control its takeoff)
     drawPerchedGull();
@@ -978,6 +1154,7 @@
     state.spawnInterval = 2200;
     state.shake = 0; state.flash = 0; state.biteProgress = 0;
     resetPerched();
+    boyHeadState = { startle: 0, nod: 0 };
     sandwichCache.lives = -1;
     scoreEl.textContent = '0';
     styleNumEl.textContent = state.sandwichStyle;
