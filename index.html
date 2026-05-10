@@ -1639,6 +1639,15 @@
       ctx.fillRect(0, 0, W, H);
     }
 
+    // Clip game elements to visible game area (prevents bleed into letterbox bars on desktop)
+    const _cx = Math.max(0, bgOffsetX);
+    const _cy = Math.max(0, bgOffsetY);
+    const _cw = Math.min(W, bgOffsetX + SRC_W * bgScale) - _cx;
+    const _ch = Math.min(H, bgOffsetY + SRC_H * bgScale) - _cy;
+    ctx.beginPath();
+    ctx.rect(_cx, _cy, _cw, _ch);
+    ctx.clip();
+
     // Always mask Lev's original sandwich, gull, and boy's head (cover them with
     // neighbouring bg patch) so our managed sprites can replace them and animate.
     maskLevSandwich();
