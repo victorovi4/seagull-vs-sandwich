@@ -348,7 +348,10 @@
     if (assets.bg) {
       const scaleX = W / SRC_W;
       const scaleY = H / SRC_H;
-      bgScale = Math.max(scaleX, scaleY);
+      // Portrait/mobile: fill screen. Landscape/desktop: letterbox (show full image).
+      bgScale = (W / H) > (SRC_W / SRC_H)
+        ? Math.min(scaleX, scaleY)
+        : Math.max(scaleX, scaleY);
       const dispW = SRC_W * bgScale;
       const dispH = SRC_H * bgScale;
       bgOffsetX = (W - dispW) / 2;
