@@ -592,12 +592,19 @@
   }
 
   function endBossPhase() {
+    if (!state.bossActive) return; // guard: уже завершилась (защита от двойного вызова)
     state.bossActive = false; state.boss = null; state.bossProjectiles = [];
     state.wavePause = false; state.wave++;
     state.waveTimer = 0; state.spawnTimer = 1200;
+    // Волновой индикатор — обновляется здесь при старте следующей волны
     waveIndicatorEl.textContent = `Волна ${state.wave}/${TOTAL_WAVES}`;
     waveOverlayEl.classList.add('hidden');
     bossHudEl.classList.add('hidden');
+    // Краткое сообщение "Следующая волна!" вместо резкого перехода
+    waveMsgEl.textContent = `Волна ${state.wave} — держись!`;
+    waveNumElDOM.textContent = `${state.wave} из ${TOTAL_WAVES}`;
+    waveOverlayEl.classList.remove('hidden');
+    setTimeout(() => waveOverlayEl.classList.add('hidden'), 2000);
   }
 
   function updateBossProjectiles(dt) {
@@ -1339,17 +1346,18 @@
     if (!hit && state.bossActive && state.boss && state.boss.phase !== 'descending') {
       const b = state.boss;
       if (Math.abs(x - b.x) < b.w * 0.52 && Math.abs(y - b.y) < b.h * 0.52) {
-        b.hp--;
-        b.hitFlash = 1;
-        bossHpValEl.textContent = Math.max(0, b.hp);
-        beep(400, 0.08, 'square', 0.09);
-        for (let f = 0; f < 5; f++) {
-          state.feathers.push({ x: b.x + jit(b.w*0.3), y: b.y + jit(b.h*0.3),
-            vx: jit(5), vy: -2 + jit(3), life: 700, rot: Math.random()*Math.PI, vr: jit(0.3) });
-        }
-        if (b.hp <= 0) {
-          // Boss defeated early — bonus, go to next wave
-          setTimeout(endBossPhase, 500);
+        if (b.hp > 0) { // не уходить в минус — защита от повторных setTimeout
+          b.hp--;
+          b.hitFlash = 1;
+          bossHpValEl.textContent = b.hp;
+          beep(400, 0.08, 'square', 0.09);
+          for (let f = 0; f < 5; f++) {
+            state.feathers.push({ x: b.x + jit(b.w*0.3), y: b.y + jit(b.h*0.3),
+              vx: jit(5), vy: -2 + jit(3), life: 700, rot: Math.random()*Math.PI, vr: jit(0.3) });
+          }
+          if (b.hp === 0) {
+            setTimeout(endBossPhase, 500); // только один раз, когда HP = 0
+          }
         }
         hit = true;
       }
