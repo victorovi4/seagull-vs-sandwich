@@ -419,6 +419,17 @@
     }
     sandwichCache.lives = -1; // invalidate
     maskCache.clear();
+    // Constrain HUD to game column (handles letterbox on desktop)
+    const gL = Math.max(0, bgOffsetX);
+    const gR = Math.max(0, W - Math.min(W, bgOffsetX + SRC_W * bgScale));
+    const gCx = gL + (W - gL - gR) / 2; // center of game column
+    hud.style.left  = (gL + 12) + 'px';
+    hud.style.right = (gR + 12) + 'px';
+    styleBtn.style.right = (gR + 14) + 'px';
+    bossHudEl.style.left      = gCx + 'px';
+    bossHudEl.style.transform = 'translateX(-50%)';
+    waveOverlayEl.style.left      = gCx + 'px';
+    waveOverlayEl.style.transform = 'translate(-50%, -50%) rotate(-1.5deg)';
   }
 
   function srcToCanvas(sx, sy) {
