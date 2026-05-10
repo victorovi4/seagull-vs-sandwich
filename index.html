@@ -235,6 +235,26 @@
   .boss-hud #bossHpVal {
     margin-left: 6px;
   }
+  .difficulty-row {
+    display: flex; gap: 10px; justify-content: center; margin: 6px 0 0;
+  }
+  .diff-btn {
+    font-family: 'Caveat', cursive;
+    font-size: clamp(17px, 4.5vw, 22px);
+    font-weight: 700;
+    padding: 6px 18px;
+    border-radius: 20px;
+    border: 2px solid #2A2A2D;
+    background: rgba(236,232,219,0.6);
+    color: #2A2A2D;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .diff-btn.selected {
+    background: #2A2A2D;
+    color: #ECE8DB;
+    transform: rotate(-1deg) scale(1.05);
+  }
 </style>
 </head>
 <body>
@@ -259,6 +279,14 @@
   <div class="picker">
     <div class="label">Что защищаем?</div>
     <div class="picker-row" id="pickerRow"></div>
+  </div>
+
+  <div class="picker">
+    <div class="label">Сложность:</div>
+    <div class="difficulty-row">
+      <button class="diff-btn selected" id="diffEasy">🕊 Просто</button>
+      <button class="diff-btn" id="diffHard">💀 Сложно</button>
+    </div>
   </div>
 
   <button class="btn" id="startBtn">Поехали!</button>
@@ -368,6 +396,7 @@
 
   let bgScale = 1, bgOffsetX = 0, bgOffsetY = 0;
   let now = 0;
+  let difficulty = 'easy'; // 'easy' | 'hard'
 
   function resize() {
     DPR = Math.min(window.devicePixelRatio || 1, 2);
@@ -1201,7 +1230,8 @@
     let hit = false;
     for (let i = state.gulls.length - 1; i >= 0; i--) {
       const g = state.gulls[i];
-      if (g.state === 'scared' || g.state === 'fleeing' || g.state === 'pecking') continue;
+      if (g.state === 'scared' || g.state === 'fleeing') continue;
+      if (g.state === 'pecking' && difficulty === 'hard') continue;
       if (gullHit(g, x, y)) {
         g.state = 'scared'; g.stateT = 0;
         const awayX = (g.x < W / 2) ? -1 : 1;
@@ -1627,6 +1657,20 @@
   });
   document.getElementById('restartBtn').addEventListener('click', () => startGame());
   document.getElementById('victoryBtn').addEventListener('click', () => startGame());
+
+  // Difficulty buttons
+  const diffEasyBtn = document.getElementById('diffEasy');
+  const diffHardBtn = document.getElementById('diffHard');
+  diffEasyBtn.addEventListener('click', () => {
+    difficulty = 'easy';
+    diffEasyBtn.classList.add('selected');
+    diffHardBtn.classList.remove('selected');
+  });
+  diffHardBtn.addEventListener('click', () => {
+    difficulty = 'hard';
+    diffHardBtn.classList.add('selected');
+    diffEasyBtn.classList.remove('selected');
+  });
 
   (async () => {
     try {
