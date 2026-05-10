@@ -165,13 +165,64 @@
     color: #2A2A2D;
     z-index: 20;
   }
+  .wave-indicator {
+    font-family: 'Caveat', cursive;
+    font-size: clamp(20px, 5vw, 28px);
+    font-weight: 700;
+    color: #2A2A2D;
+    background: rgba(236, 232, 219, 0.85);
+    padding: 2px 10px;
+    border-radius: 2px;
+    box-shadow: 2px 2px 0 rgba(0,0,0,0.1);
+    transform: rotate(1deg);
+  }
+  .kill-badge {
+    font-size: 0.82em;
+    color: #5A5DAB;
+    margin-left: 8px;
+  }
+  .wave-overlay {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%) rotate(-1.5deg);
+    background: rgba(236, 232, 219, 0.95);
+    padding: 16px 32px;
+    border-radius: 4px;
+    text-align: center;
+    z-index: 8;
+    box-shadow: 3px 3px 0 rgba(0,0,0,0.12);
+    pointer-events: none;
+  }
+  .wave-overlay-msg {
+    font-family: 'Caveat', cursive;
+    font-size: clamp(24px, 6vw, 40px);
+    font-weight: 700;
+    color: #2A2A2D;
+    line-height: 1.1;
+  }
+  .wave-overlay-num {
+    font-family: 'Patrick Hand', cursive;
+    font-size: clamp(14px, 3.5vw, 20px);
+    color: #5A5DAB;
+    margin-top: 4px;
+  }
+  .victory-rank {
+    font-family: 'Caveat', cursive;
+    font-size: clamp(30px, 7vw, 54px);
+    font-weight: 700;
+    color: #5A5DAB;
+    margin: 8px 0 16px;
+    transform: rotate(-1deg);
+    display: block;
+  }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 
 <div class="hud hidden" id="hud">
-  <div class="score">Счёт: <span id="scoreVal">0</span></div>
+  <div class="score">Счёт: <span id="scoreVal">0</span><span class="kill-badge">🐦 <span id="killVal">0</span></span></div>
+  <div class="wave-indicator" id="waveIndicator">Волна 1/5</div>
   <div class="lives" id="lives"></div>
 </div>
 
@@ -200,6 +251,18 @@
   <button class="btn secondary" id="restartBtn">Ещё разок</button>
 </div>
 
+<div class="overlay hidden" id="victoryScreen">
+  <h1 style="font-family:'Caveat',cursive;font-size:clamp(48px,10vw,72px);transform:rotate(-2deg)">🎉 Победа!</h1>
+  <span class="victory-rank" id="victoryRank"></span>
+  <p id="victoryStats" style="font-size:clamp(16px,4vw,20px);color:#3F3F45;margin-bottom:20px"></p>
+  <button class="btn" id="victoryBtn">Ещё раз!</button>
+</div>
+
+<div class="wave-overlay hidden" id="waveOverlay">
+  <div class="wave-overlay-msg" id="waveMsg"></div>
+  <div class="wave-overlay-num" id="waveNumEl"></div>
+</div>
+
 <script>
 (() => {
   const canvas = document.getElementById('game');
@@ -214,6 +277,14 @@
   const endMsg = document.getElementById('endMsg');
   const styleBtn = document.getElementById('styleBtn');
   const styleNumEl = document.getElementById('styleNum');
+  const killEl            = document.getElementById('killVal');
+  const waveIndicatorEl   = document.getElementById('waveIndicator');
+  const waveOverlayEl     = document.getElementById('waveOverlay');
+  const waveMsgEl         = document.getElementById('waveMsg');
+  const waveNumElDOM      = document.getElementById('waveNumEl');
+  const victoryScreenEl   = document.getElementById('victoryScreen');
+  const victoryRankEl     = document.getElementById('victoryRank');
+  const victoryStatsEl    = document.getElementById('victoryStats');
   const pickerRow = document.getElementById('pickerRow');
 
   let W = 0, H = 0, DPR = 1;
@@ -300,8 +371,33 @@
     spawnTimer: 800, spawnInterval: 2200,
     timeAlive: 0, shake: 0, flash: 0,
     biteProgress: 0,
-    sandwichStyle: 1 // 1..4
+    sandwichStyle: 1,
+    // Wave system
+    wave: 1,        // текущая волна 1..5
+    waveTimer: 0,   // мс прошедших в текущей волне
+    wavePause: false,
+    pauseTimer: 0,  // обратный отсчёт паузы между волнами
+    killCount: 0    // всего убито чаек
   };
+
+  const WAVE_DURATION = 30000; // мс на волну
+  const PAUSE_DURATION = 3000; // мс паузы между волнами
+  const TOTAL_WAVES = 5;
+
+  const WAVE_MESSAGES = [
+    '',                        // волна 1 — без паузы перед ней
+    'Ещё одна стая летит!',   // перед волной 2
+    'Держись, пират!',        // перед волной 3
+    'Бутерброд в опасности!', // перед волной 4
+    'Последняя волна!',       // перед волной 5
+  ];
+
+  function getTitle(kills) {
+    if (kills >= 21) return 'Легенда парка 300-летия!';
+    if (kills >= 13) return 'Гроза чаек';
+    if (kills >= 6)  return 'Страж бутерброда';
+    return 'Защитник';
+  }
 
   // ===== AUDIO =====
   let audioCtx;
@@ -912,7 +1008,9 @@
           });
         }
         state.score++;
+        state.killCount++;
         scoreEl.textContent = state.score;
+        killEl.textContent = state.killCount;
         triggerBoyNod();
         whooshSound(); gullCry();
         hit = true; break;
@@ -1041,6 +1139,50 @@
     });
   }
 
+  // ===== WAVE SPAWN =====
+  function spawnForWave(wave) {
+    const r = Math.random();
+    if (wave === 1) {
+      state.gulls.push(makeGull());
+    } else if (wave === 2) {
+      if (r < 0.22) {
+        state.gulls.push(makeGull({ type: 'fromLeft' }));
+        state.gulls.push(makeGull({ type: 'fromRight' }));
+      } else {
+        state.gulls.push(makeGull());
+      }
+    } else if (wave === 3) {
+      if (r < 0.22) {
+        state.gulls.push(makeGull({ type: 'fromLeft' }));
+        state.gulls.push(makeGull({ type: 'fromRight' }));
+      } else if (r < 0.38) {
+        state.gulls.push(makeGull({ type: 'walking' }));
+      } else {
+        state.gulls.push(makeGull());
+      }
+    } else {
+      // волны 4–5: всё включая пике и стаи
+      if (r < 0.18) {
+        state.gulls.push(makeGull({ type: 'fromLeft' }));
+        state.gulls.push(makeGull({ type: 'fromRight' }));
+        setTimeout(() => { if (state.running) state.gulls.push(makeGull()); }, 250);
+      } else if (r < 0.30) {
+        state.gulls.push(makeGull({ type: 'dive' }));
+      } else if (r < 0.45) {
+        state.gulls.push(makeGull({ type: 'walking' }));
+      } else if (r < 0.62) {
+        state.gulls.push(makeGull({ type: 'fromLeft' }));
+        state.gulls.push(makeGull({ type: 'fromRight' }));
+      } else {
+        state.gulls.push(makeGull());
+      }
+    }
+    // Скорость спавна: каждая волна чуть быстрее
+    const waveFactor = [1.0, 0.88, 0.76, 0.62, 0.50][wave - 1];
+    state.spawnInterval = (1900 + Math.random() * 600) * waveFactor;
+    state.spawnTimer = state.spawnInterval;
+  }
+
   // ===== LOOP =====
   let lastT = 0;
   function loop(t) {
@@ -1053,48 +1195,12 @@
 
       updatePerched(dt);
 
-      state.spawnTimer -= dt;
-      if (state.spawnTimer <= 0) {
-        // Difficulty stages
-        // Stage 0:  0–15s — single normal gulls
-        // Stage 1: 15–30s — singles, occasional pair (left+right), some walkers
-        // Stage 2: 30s+   — swarms of 3, occasional dive, walkers more often
-        const t = state.timeAlive;
-        if (t < 15000) {
-          state.gulls.push(makeGull());
-        } else if (t < 30000) {
-          const r = Math.random();
-          if (r < 0.20) {
-            // pair attack: simultaneous left + right
-            state.gulls.push(makeGull({ type: 'fromLeft' }));
-            state.gulls.push(makeGull({ type: 'fromRight' }));
-          } else if (r < 0.35) {
-            state.gulls.push(makeGull({ type: 'walking' }));
-          } else {
-            state.gulls.push(makeGull());
-          }
-        } else {
-          const r = Math.random();
-          if (r < 0.18) {
-            // swarm of 3
-            state.gulls.push(makeGull({ type: 'fromLeft' }));
-            state.gulls.push(makeGull({ type: 'fromRight' }));
-            setTimeout(() => { if (state.running) state.gulls.push(makeGull()); }, 250);
-          } else if (r < 0.30) {
-            // dive bomb!
-            state.gulls.push(makeGull({ type: 'dive' }));
-          } else if (r < 0.45) {
-            state.gulls.push(makeGull({ type: 'walking' }));
-          } else if (r < 0.60) {
-            state.gulls.push(makeGull({ type: 'fromLeft' }));
-            state.gulls.push(makeGull({ type: 'fromRight' }));
-          } else {
-            state.gulls.push(makeGull());
-          }
+      // Спавн только вне паузы
+      if (!state.wavePause) {
+        state.spawnTimer -= dt;
+        if (state.spawnTimer <= 0) {
+          spawnForWave(state.wave);
         }
-        const factor = Math.max(0.45, 1 - state.timeAlive * 0.000035);
-        state.spawnInterval = (1900 + Math.random() * 600) * factor;
-        state.spawnTimer = state.spawnInterval;
       }
       updateGulls(dt);
       updateParticles(dt);
@@ -1103,6 +1209,37 @@
       if (state.biteProgress > 0) state.biteProgress = Math.max(0, state.biteProgress - dt * 0.003);
       if (boyHeadState.startle > 0) boyHeadState.startle = Math.max(0, boyHeadState.startle - dt * 0.0015);
       if (boyHeadState.nod > 0) boyHeadState.nod = Math.max(0, boyHeadState.nod - dt * 0.003);
+
+      // Wave timer
+      if (!state.wavePause) {
+        state.waveTimer += dt;
+        if (state.waveTimer >= WAVE_DURATION) {
+          if (state.wave < TOTAL_WAVES) {
+            // Начать паузу перед следующей волной
+            state.wavePause = true;
+            state.pauseTimer = PAUSE_DURATION;
+            state.waveTimer = 0;
+            waveMsgEl.textContent = WAVE_MESSAGES[state.wave]; // state.wave ещё = текущая, сообщение про следующую
+            waveNumElDOM.textContent = `Волна ${state.wave + 1} из ${TOTAL_WAVES}`;
+            waveOverlayEl.classList.remove('hidden');
+            triggerBoyNod();
+          } else {
+            // Волна 5 закончена — победа
+            victoryGame();
+          }
+        }
+      } else {
+        // Идёт пауза
+        state.pauseTimer -= dt;
+        if (state.pauseTimer <= 0) {
+          state.wavePause = false;
+          state.wave++;
+          state.waveTimer = 0;
+          state.spawnTimer = 1200; // небольшая задержка перед первым спавном
+          waveIndicatorEl.textContent = `Волна ${state.wave}/${TOTAL_WAVES}`;
+          waveOverlayEl.classList.add('hidden');
+        }
+      }
     }
 
     ctx.save();
@@ -1157,14 +1294,24 @@
     state.spawnTimer = 1500;
     state.spawnInterval = 2200;
     state.shake = 0; state.flash = 0; state.biteProgress = 0;
+    // Wave system reset
+    state.wave = 1;
+    state.waveTimer = 0;
+    state.wavePause = false;
+    state.pauseTimer = 0;
+    state.killCount = 0;
     resetPerched();
     boyHeadState = { startle: 0, nod: 0 };
     sandwichCache.lives = -1;
     scoreEl.textContent = '0';
+    killEl.textContent = '0';
+    waveIndicatorEl.textContent = `Волна 1/${TOTAL_WAVES}`;
     styleNumEl.textContent = state.sandwichStyle;
     updateLivesUI();
     hud.classList.remove('hidden');
     styleBtn.classList.remove('hidden');
+    waveOverlayEl.classList.add('hidden');
+    victoryScreenEl.classList.add('hidden');
     startScreen.classList.add('hidden');
     endScreen.classList.add('hidden');
   }
@@ -1188,11 +1335,25 @@
     }, 800);
   }
 
+  function victoryGame() {
+    state.running = false;
+    const rank = getTitle(state.killCount);
+    victoryRankEl.textContent = rank;
+    victoryStatsEl.textContent = `Счёт: ${state.score}  ·  Чаек сбито: ${state.killCount}`;
+    setTimeout(() => {
+      hud.classList.add('hidden');
+      styleBtn.classList.add('hidden');
+      waveOverlayEl.classList.add('hidden');
+      victoryScreenEl.classList.remove('hidden');
+    }, 600);
+  }
+
   document.getElementById('startBtn').addEventListener('click', () => {
     ensureAudio();
     startGame();
   });
   document.getElementById('restartBtn').addEventListener('click', () => startGame());
+  document.getElementById('victoryBtn').addEventListener('click', () => startGame());
 
   (async () => {
     try {
