@@ -740,57 +740,91 @@
   }
   function whooshSound() { beep(400, 0.15, 'triangle', 0.04); }
 
-  // ===== MUSIC: Mission Impossible Theme (procedural, Web Audio API) =====
-  const _B = 60 / 104;          // beat duration at 104 BPM (≈0.577s)
-  const _LOOP = 20 * _B;        // 4 bars × 5 beats = 20 beats loop
+  // ===== MUSIC: Mission Impossible Theme — rich synthesis =====
+  const _B = 60 / 104;
+  const _LOOP = 20 * _B;
   let _musicOn = false, _musicTick = null, _nextLoop = 0;
-  let _bngHi = null, _bngLo = null;
+  let _bngBuf = null, _reverb = null, _mComp = null, _mDry = null, _mWet = null;
 
-  function _initBongo() {
-    if (!audioCtx || _bngHi) return;
-    const sr = audioCtx.sampleRate, n = Math.floor(sr * 0.13);
-    _bngHi = audioCtx.createBuffer(1, n, sr);
-    _bngLo = audioCtx.createBuffer(1, n, sr);
-    const hd = _bngHi.getChannelData(0), ld = _bngLo.getChannelData(0);
-    for (let i = 0; i < n; i++) {
-      hd[i] = (Math.random()*2-1) * Math.exp(-i/(n*0.22));
-      ld[i] = (Math.random()*2-1) * Math.exp(-i/(n*0.38));
+  function _initAudioChain() {
+    if (!audioCtx || _mComp) return;
+    // Compressor → master output
+    _mComp = audioCtx.createDynamicsCompressor();
+    _mComp.threshold.value = -18; _mComp.knee.value = 10;
+    _mComp.ratio.value = 4; _mComp.attack.value = 0.005; _mComp.release.value = 0.15;
+    _mDry = audioCtx.createGain(); _mDry.gain.value = 0.82;
+    _mWet = audioCtx.createGain(); _mWet.gain.value = 0.22;
+    _mComp.connect(_mDry); _mDry.connect(audioCtx.destination);
+    // Convolution reverb (noise-based impulse)
+    _reverb = audioCtx.createConvolver();
+    const sr = audioCtx.sampleRate, rlen = Math.floor(sr * 1.8);
+    const rbuf = audioCtx.createBuffer(2, rlen, sr);
+    for (let c = 0; c < 2; c++) {
+      const ch = rbuf.getChannelData(c);
+      for (let i = 0; i < rlen; i++) ch[i] = (Math.random()*2-1) * Math.pow(1-i/rlen, 2.2);
     }
+    _reverb.buffer = rbuf;
+    _reverb.connect(_mWet); _mWet.connect(audioCtx.destination);
+    // Pre-compute bongo noise
+    const bn = Math.floor(sr * 0.22);
+    _bngBuf = audioCtx.createBuffer(1, bn, sr);
+    const bd = _bngBuf.getChannelData(0);
+    for (let i = 0; i < bn; i++) bd[i] = (Math.random()*2-1) * Math.exp(-i/(bn*0.18));
   }
 
   function _bongo(t, hi) {
-    if (!audioCtx) return;
-    _initBongo();
-    const src = audioCtx.createBufferSource();
-    src.buffer = hi ? _bngHi : _bngLo;
-    const g = audioCtx.createGain(), flt = audioCtx.createBiquadFilter();
-    flt.type = 'bandpass'; flt.frequency.value = hi ? 370 : 200; flt.Q.value = 3;
-    g.gain.setValueAtTime(hi ? 0.11 : 0.09, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
-    src.connect(flt); flt.connect(g); g.connect(audioCtx.destination);
-    src.start(t); src.stop(t + 0.14);
+    if (!audioCtx) return; _initAudioChain();
+    // Noise burst with pitch-swept tone — realistic bongo
+    const ng = audioCtx.createGain(), tg = audioCtx.createGain();
+    const flt = audioCtx.createBiquadFilter();
+    flt.type = 'bandpass'; flt.frequency.value = hi ? 420 : 220; flt.Q.value = 2.5;
+    ng.gain.setValueAtTime(hi ? 0.18 : 0.15, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.17);
+    const ns = audioCtx.createBufferSource(); ns.buffer = _bngBuf;
+    ns.connect(flt); flt.connect(ng); ng.connect(_mComp); ng.connect(_reverb);
+    ns.start(t); ns.stop(t + 0.22);
+    // Tone sweep (the "thump")
+    const osc = audioCtx.createOscillator();
+    osc.frequency.setValueAtTime(hi ? 560 : 300, t);
+    osc.frequency.exponentialRampToValueAtTime(hi ? 190 : 90, t + 0.12);
+    tg.gain.setValueAtTime(hi ? 0.22 : 0.18, t);
+    tg.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    osc.connect(tg); tg.connect(_mComp); tg.connect(_reverb);
+    osc.start(t); osc.stop(t + 0.18);
   }
 
   function _mNote(f, t, dur, v) {
-    if (!audioCtx) return;
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = 'sawtooth'; o.frequency.value = f;
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(v, t + 0.025);
-    g.gain.setValueAtTime(v * 0.55, t + dur * 0.78);
-    g.gain.linearRampToValueAtTime(0, t + dur);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(t); o.stop(t + dur + 0.02);
+    if (!audioCtx) return; _initAudioChain();
+    // 3 detuned oscillators + lowpass → rich brass-like tone
+    [-10, 0, 10].forEach((det, i) => {
+      const o = audioCtx.createOscillator();
+      const flt = audioCtx.createBiquadFilter();
+      const g = audioCtx.createGain();
+      o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det;
+      flt.type = 'lowpass'; flt.frequency.value = f * 3.5; flt.Q.value = 0.4;
+      const vol = v / 3;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.045); // proper attack
+      g.gain.setValueAtTime(vol * 0.62, t + dur * 0.72);
+      g.gain.linearRampToValueAtTime(0, t + dur + 0.06);
+      o.connect(flt); flt.connect(g);
+      g.connect(_mComp); g.connect(_reverb); // dry + reverb send
+      o.start(t); o.stop(t + dur + 0.12);
+    });
   }
 
   function _mBass(f, t, dur, v) {
-    if (!audioCtx) return;
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = 'triangle'; o.frequency.value = f;
-    g.gain.setValueAtTime(v, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(t); o.stop(t + dur + 0.01);
+    if (!audioCtx) return; _initAudioChain();
+    // Triangle + sub-octave sine for warm bass
+    [[f, 'triangle', v * 0.6], [f/2, 'sine', v * 0.45]].forEach(([freq, type, vol]) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.025);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur + 0.05);
+      o.connect(g); g.connect(_mComp);
+      o.start(t); o.stop(t + dur + 0.08);
+    });
   }
 
   // Frequencies
