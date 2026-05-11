@@ -1607,7 +1607,7 @@
     lastT = t;
 
     if (state.running) {
-      if (!_musicOn) startMusic(); // запускаем при первом кадре
+      if (!_musicEl) startMusic(); // запускаем при первом кадре
       state.timeAlive += dt;
 
       updatePerched(dt);
