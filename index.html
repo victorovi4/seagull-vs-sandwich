@@ -584,7 +584,7 @@
   }
 
   function bossShoot() {
-    if (!state.boss || !assets.bossProj) return;
+    if (!state.boss) return;
     const b = state.boss;
     const target = srcToCanvas(SRC.sandwichCenter.x, SRC.sandwichCenter.y);
     const dx = target.x - b.x, dy = target.y - b.y;
@@ -698,17 +698,54 @@
   }
 
   function drawBossProjectiles() {
-    if (!assets.bossProj || !state.bossProjectiles.length) return;
-    const pw = Math.max(28, 40 * bgScale);
-    const ph = pw * (assets.bossProj.height / assets.bossProj.width);
+    if (!state.bossProjectiles.length) return;
+    const t = now * 0.003;
+    const sz = Math.max(14, 20 * bgScale);
     for (const p of state.bossProjectiles) {
       ctx.save();
       ctx.translate(p.x, p.y);
-      ctx.rotate(now * p.spin);
-      const prev = ctx.globalCompositeOperation;
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.drawImage(assets.bossProj, -pw / 2, -ph / 2, pw, ph);
-      ctx.globalCompositeOperation = prev;
+      // Хвост — 3 затухающих круга позади снаряда
+      const spd = Math.sqrt(p.vx*p.vx + p.vy*p.vy) || 1;
+      const nx = -p.vx / spd, ny = -p.vy / spd;
+      for (let i = 1; i <= 3; i++) {
+        ctx.beginPath();
+        ctx.arc(nx * sz * i * 1.0, ny * sz * i * 1.0, Math.max(2, sz * (1 - i * 0.28)), 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,${Math.max(0, 140 - i*40)},0,${0.38 - i * 0.1})`;
+        ctx.fill();
+      }
+      // Внешнее свечение
+      const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, sz * 2.2);
+      glow.addColorStop(0, 'rgba(255,200,30,0.45)');
+      glow.addColorStop(0.5, 'rgba(255,80,0,0.2)');
+      glow.addColorStop(1, 'rgba(200,30,0,0)');
+      ctx.beginPath(); ctx.arc(0, 0, sz * 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = glow; ctx.fill();
+      // Языки пламени — 5 вращающихся «капель»
+      const rotSpd = 1.8 + (p.spin || 0) * 300;
+      for (let i = 0; i < 5; i++) {
+        const ang = (i / 5) * Math.PI * 2 + t * rotSpd;
+        const flen = sz * (1.35 + 0.28 * Math.sin(t * 4.5 + i * 1.26));
+        ctx.save();
+        ctx.rotate(ang);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.quadraticCurveTo(sz * 0.42, -flen * 0.5, 0, -flen);
+        ctx.quadraticCurveTo(-sz * 0.42, -flen * 0.5, 0, 0);
+        const fg = ctx.createLinearGradient(0, 0, 0, -flen);
+        fg.addColorStop(0,   'rgba(255,230,0,0.95)');
+        fg.addColorStop(0.45,'rgba(255,90,0,0.75)');
+        fg.addColorStop(1,   'rgba(220,0,0,0)');
+        ctx.fillStyle = fg; ctx.fill();
+        ctx.restore();
+      }
+      // Ядро: белый → жёлтый → оранжевый
+      const core = ctx.createRadialGradient(-sz*0.22, -sz*0.22, 0, 0, 0, sz);
+      core.addColorStop(0,   '#fff');
+      core.addColorStop(0.22,'#ffe060');
+      core.addColorStop(0.6, '#ff6a00');
+      core.addColorStop(1,   '#bb1000');
+      ctx.beginPath(); ctx.arc(0, 0, sz, 0, Math.PI * 2);
+      ctx.fillStyle = core; ctx.fill();
       ctx.restore();
     }
   }
@@ -732,8 +769,9 @@
     o.start(t); o.stop(t + dur);
   }
   function gullCry() {
-    beep(900 + Math.random() * 200, 0.08, 'sawtooth', 0.05);
-    setTimeout(() => beep(700 + Math.random() * 150, 0.08, 'sawtooth', 0.04), 90);
+    _gullCryEl.currentTime = 0;
+    _gullCryEl.volume = 0.9;
+    _gullCryEl.play().catch(()=>{});
   }
   function chompSound() {
     beep(160, 0.12, 'square', 0.06);
@@ -1465,12 +1503,11 @@
       }
     }
     // Boss projectile hit detection
-    if (!hit && state.bossActive && assets.bossProj) {
-      const pw = Math.max(28, 40 * bgScale);
-      const ph = pw * (assets.bossProj.height / assets.bossProj.width);
+    if (!hit && state.bossActive) {
+      const pr = Math.max(14, 20 * bgScale);
       for (let i = state.bossProjectiles.length - 1; i >= 0; i--) {
         const p = state.bossProjectiles[i];
-        if (Math.abs(x - p.x) < pw * 0.65 && Math.abs(y - p.y) < ph * 0.65) {
+        if (Math.hypot(x - p.x, y - p.y) < pr * 1.8) {
           state.bossProjectiles.splice(i, 1);
           state.score++; state.killCount++;
           scoreEl.textContent = state.score;
