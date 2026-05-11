@@ -526,7 +526,6 @@
     state.bossProjectiles = [];
     bossHpValEl.textContent = hp;
     bossHudEl.classList.remove('hidden');
-    startBossMusic();
     state.gulls.forEach(g => {
       if (g.state !== 'fleeing') { g.state = 'scared'; g.stateT = 0; g.vx = g.x < W/2 ? -8 : 8; g.vy = -6; }
     });
@@ -760,15 +759,38 @@
     if (_musicEl) { _musicEl.pause(); _musicEl.currentTime = 0; }
   }
 
+  function _fadeOut(el, durationMs, onDone) {
+    if (!el) { onDone && onDone(); return; }
+    const startVol = el.volume;
+    const steps = 25;
+    const step_ms = durationMs / steps;
+    let s = 0;
+    const iv = setInterval(() => {
+      s++;
+      el.volume = Math.max(0, startVol * (1 - s / steps));
+      if (s >= steps) {
+        clearInterval(iv);
+        el.pause(); el.currentTime = 0;
+        el.volume = startVol; // восстановим на будущее
+        onDone && onDone();
+      }
+    }, step_ms);
+  }
+
   function startBossMusic() {
-    if (_musicEl) { _musicEl.pause(); }
     _bossEl.currentTime = 0;
     _bossEl.play().catch(()=>{});
   }
 
   function stopBossMusic() {
     _bossEl.pause(); _bossEl.currentTime = 0;
-    if (_musicEl) _musicEl.play().catch(()=>{});
+    if (_musicEl) { _musicEl.volume = 0.45; _musicEl.play().catch(()=>{}); }
+  }
+
+  // Плавный переход: затихает MI → запускается Дарт Вейдер → через 1.5с появляется босс
+  function triggerBossTransition(variant) {
+    _fadeOut(_musicEl, 700, () => startBossMusic());
+    setTimeout(() => startBossPhase(variant), 1500);
   }
 
     function jit(a) { return (Math.random() - 0.5) * a; }
@@ -1654,7 +1676,7 @@
             state.pauseTimer = 999999; // босс сам завершит паузу
             state.waveTimer = 0;
             waveOverlayEl.classList.add('hidden');
-            startBossPhase(state.wave); // variant = wave number
+            triggerBossTransition(state.wave); // fade → Imperial March → boss через 1.5с
           } else if (state.wave < TOTAL_WAVES) {
             // Обычная пауза перед следующей волной
             state.wavePause = true;
